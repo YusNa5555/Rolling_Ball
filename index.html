@@ -1645,7 +1645,7 @@ function buildLevel(n){
       // ぐるぐる回る円盤：乗ると一緒に回される。回りながら出口へ
       const lp = addPlat(6, width, cy, cy, col(), cx); lp.noMob = true; lp.wait = true;
       const R2 = 4.0, cd = d + R2;
-      const omega = (0.55 + Math.min(n * 0.02, 0.35)) * (rand() < 0.5 ? -1 : 1);
+      const omega = (2.1 + Math.min(n * 0.02, 0.6)) * (rand() < 0.5 ? -1 : 1);
       const dp = {d0:cd - R2, d1:cd + R2, cx, cx0:cx, cx1:cx, w:R2 * 2, y0:cy, y1:cy, disc:{cx, cd, R:R2, omega}, rails:false, noMob:true};
       plats.push(dp);
       const dtex = makeCanvasTex((g, s2)=>{
@@ -2229,6 +2229,9 @@ function update(dt){
       const dc = gPlat.disc, a = dc.omega * dt, ca = Math.cos(a), sa = Math.sin(a);
       const rx = b.x - dc.cx, rd = b.d - dc.cd;
       b.x = dc.cx + rx * ca - rd * sa; b.d = dc.cd + rx * sa + rd * ca;
+      const rr = Math.hypot(rx, rd);                                  // 遠心力：外へはじき飛ばされる
+      if(rr > 0.2){ const ac = 0.9 * dc.omega * dc.omega * rr; b.vx += (rx / rr) * ac * dt; b.vd += (rd / rr) * ac * dt; }
+      b.vx *= 1 - 2.2 * dt; b.vd *= 1 - 2.2 * dt;                    // すべりにくくて、スピードが落ちる
     }
     const onG = b.grounded;
     const onIce = onG && gPlat && gPlat.ice;
@@ -2238,7 +2241,7 @@ function update(dt){
     let ax = inp.x * A * ctrl - drag * b.vx;
     let ad = inp.y * A * ctrl - drag * b.vd;
     if(onG) ad -= SLOPE_G * slope;      // 坂道：上りは減速、下りは加速
-    if(onG && gPlat && gPlat.belt) ad -= 6;      // 逆走ベルト
+    if(onG && gPlat && gPlat.belt) ad -= Math.min(15, 10 + level * 0.25);      // 逆走ベルト
     // ブースト板
     const padOn = onG && pads.some(p => b.d >= p.d0 && b.d <= p.d1 && Math.abs(b.x - p.cx) < p.w / 2 + 0.2);
     if(padOn){ b.boost = 1.4; ad += 34; }
