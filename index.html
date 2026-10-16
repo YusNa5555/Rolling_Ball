@@ -585,6 +585,81 @@ function playRescue(){
     });
   }catch(e){}
 }
+function playSplash(){
+  if(!actx || muted) return;
+  if(actx.state !== "running") actx.resume();
+  try{
+    const t = actx.currentTime, len = Math.floor(actx.sampleRate * 0.3);
+    const buf = actx.createBuffer(1, len, actx.sampleRate), dd = buf.getChannelData(0);
+    for(let i=0; i<len; i++) dd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const bp = actx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1200; bp.Q.value = 0.8;
+    const ng = actx.createGain(); ng.gain.value = 0.35;
+    src.connect(bp); bp.connect(ng); ng.connect(actx.destination); src.start(t);
+    const o = actx.createOscillator(), og = actx.createGain();      // 「ぽちゃん」のしずくの音
+    o.type = "sine";
+    o.frequency.setValueAtTime(900, t + 0.02); o.frequency.exponentialRampToValueAtTime(380, t + 0.2);
+    og.gain.setValueAtTime(0.0001, t + 0.02); og.gain.exponentialRampToValueAtTime(0.25, t + 0.04); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    o.connect(og); og.connect(actx.destination); o.start(t + 0.02); o.stop(t + 0.3);
+  }catch(e){}
+}
+let dotTexCache = null;
+function getDotTex(){                                   // 丸い点のテクスチャ（四角に見えないように）
+  if(!dotTexCache){
+    const c = mkCanvas(64, 64), g = c.getContext("2d");
+    const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+    gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(0.6, "rgba(255,255,255,0.95)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = gr; g.beginPath(); g.arc(32, 32, 30, 0, Math.PI * 2); g.fill();
+    dotTexCache = new THREE.CanvasTexture(c);
+  }
+  return dotTexCache;
+}
+const fx = {rings:[], drops:null, vel:null, t:-1, x:0, y:0, z:0};
+function initFx(){
+  if(fx.rings.length) return;
+  for(let i=0; i<3; i++){
+    const m = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.7, 40),
+      new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0, side:THREE.DoubleSide, depthWrite:false, fog:false}));
+    m.rotation.x = -Math.PI / 2; m.visible = false; scene.add(m); fx.rings.push(m);
+  }
+  const N = 36, pos = new Float32Array(N * 3);
+  const dg = new THREE.BufferGeometry(); dg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  fx.drops = new THREE.Points(dg, new THREE.PointsMaterial({color:0xffffff, size:0.34, map:getDotTex(), transparent:true, alphaTest:0.05, depthWrite:false, sizeAttenuation:true, fog:false}));
+  fx.drops.visible = false; fx.drops.frustumCulled = false; scene.add(fx.drops);
+  fx.vel = new Float32Array(N * 3);
+}
+function splash(x, d, y){                       // ぽちゃん：波紋としぶき
+  initFx();
+  fx.t = 0; fx.x = x; fx.y = y; fx.z = -d;
+  const pos = fx.drops.geometry.attributes.position.array;
+  for(let i=0; i<36; i++){
+    pos[i*3] = x; pos[i*3+1] = y; pos[i*3+2] = -d;
+    const a = Math.random() * 6.28, sp = 1 + Math.random() * 2.2;
+    fx.vel[i*3] = Math.cos(a) * sp; fx.vel[i*3+1] = 4 + Math.random() * 4; fx.vel[i*3+2] = Math.sin(a) * sp;
+  }
+  fx.drops.geometry.attributes.position.needsUpdate = true;
+  playSplash();
+}
+function updateFx(dt){
+  if(fx.t < 0) return;
+  fx.t += dt;
+  fx.rings.forEach((m, k)=>{
+    const u = fx.t - k * 0.2;
+    if(u > 0 && u < 1.4){
+      m.visible = true; m.position.set(fx.x, fx.y + 0.04, fx.z);
+      const sc = 1 + u * 7; m.scale.set(sc, sc, sc); m.material.opacity = Math.max(0, 0.75 * (1 - u / 1.4));
+    } else m.visible = false;
+  });
+  fx.drops.visible = fx.t < 1.4;
+  const pos = fx.drops.geometry.attributes.position.array;
+  for(let i=0; i<36; i++){
+    fx.vel[i*3+1] -= 14 * dt;
+    pos[i*3] += fx.vel[i*3] * dt; pos[i*3+1] += fx.vel[i*3+1] * dt; pos[i*3+2] += fx.vel[i*3+2] * dt;
+    if(pos[i*3+1] < fx.y){ pos[i*3+1] = fx.y; fx.vel[i*3+1] = 0; fx.vel[i*3] = 0; fx.vel[i*3+2] = 0; }
+  }
+  fx.drops.geometry.attributes.position.needsUpdate = true;
+  if(fx.t > 1.6){ fx.t = -1; fx.drops.visible = false; fx.rings.forEach(m=>{ m.visible = false; }); }
+}
 function playBonk(){
   if(!actx || muted) return;
   if(actx.state !== "running") actx.resume();
@@ -959,9 +1034,9 @@ window.addEventListener("keydown", e=>{ if(e.key === "Escape" && settingsOpen) c
 
 /* ---------- レベル生成 ---------- */
 let levelGroup = null;
-let plats = [], blocks = [], gemList = [], spinners = [], pads = [], tiles = [], movers = [], belts = [], cats = [], turtles = [], penguins = [], flocks = [], elevs = [], turns = [];
+let plats = [], blocks = [], gemList = [], spinners = [], pads = [], tiles = [], movers = [], belts = [], cats = [], turtles = [], penguins = [], flocks = [], elevs = [], turns = [], ponds = [];
 let gPlat = null;
-let skyRef = null, layers = null;
+let skyRef = null, layers = null, waterY = null;
 let finishD = 0, minY = 0, railsOn = false;
 
 function rng(seed){
@@ -1015,7 +1090,7 @@ function getPool(n){
   if(n === 1) return ["s","s","slope"];
   if(n === 2) return ["s","curve","slope","curve"];
   let p = ["s","slope","shift","curve"];
-  if(n >= 3) p.push("arc");
+  if(n >= 3) p.push("arc", "pond");
   if(n >= 4) p = p.concat(["jump","cat"]);
   if(n >= 5) p = p.concat(["bridge","boost"]);
   if(n >= 6) p = p.concat(["spinner","chain"]);
@@ -1024,11 +1099,14 @@ function getPool(n){
   if(n >= 5) p.push("turtle");
   if(n >= 6) p.push("penguin");
   if(n >= 7) p.push("flock");
+  if(n >= 6) p.push("bumpy");
   if(n >= 8) p.push("hill");
   if(n >= 9) p.push("turntable");
   if(n >= 10) p.push("snake");
   if(n >= 11) p.push("jumpfest");
   if(n >= 13) p.push("elevator");
+  if(n >= 12) p = p.filter(t => t !== "s");                       // 何もない直線は、だんだん出さない
+  if(n >= 14) p.push("hill", "turntable", "elevator", "jumpfest");  // 変化のある道を出やすく
   if(n >= 10) p.push("trampoline");
   if(n >= 12) p.push("ice");
   if(n >= 14) p.push("belt");
@@ -1105,13 +1183,13 @@ function buildScenery(grp, th, rand, endD){
     const side = rand() < 0.5 ? -1 : 1;
     cloud(side * (16 + rand() * 40), minY - 8 + rand() * 30, -rand() * span, 2 + rand() * 3, cloudList);
   }
-  for(let i=0; i<34; i++){                       // 足元に広がる雲海
+  for(let i=0; i<(th.water ? 0 : 34); i++){        // 足元に広がる雲海（水のあるテーマでは水面にする）
     cloud((rand() - 0.5) * 120, minY - 13 - rand() * 4, -rand() * span, 5 + rand() * 5, seaList);
   }
   const cloudMat = new THREE.MeshLambertMaterial({color:th.cloud, emissive:th.cloud, emissiveIntensity:0.35, flatShading:true});
   const lyClouds = new THREE.Group(), lySea = new THREE.Group(), lyIsl = new THREE.Group();
   lyClouds.add(new THREE.Mesh(mergeGeos(cloudList), cloudMat));
-  lySea.add(new THREE.Mesh(mergeGeos(seaList), cloudMat));
+  if(seaList.length) lySea.add(new THREE.Mesh(mergeGeos(seaList), cloudMat));
   grp.add(lyClouds, lySea, lyIsl);
 
   // うかぶ島
@@ -1161,7 +1239,7 @@ function buildScenery(grp, th, rand, endD){
       const N = 400, pos = new Float32Array(N * 3);
       for(let i=0; i<N; i++){ pos[i*3] = (rand() - 0.5) * 30; pos[i*3+1] = -6 + rand() * 20 + k * 20; pos[i*3+2] = 4 - rand() * 40; }
       const sg = new THREE.BufferGeometry(); sg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-      snowGrp.add(new THREE.Points(sg, new THREE.PointsMaterial({color:0xffffff, size:0.14, sizeAttenuation:true, fog:false})));
+      snowGrp.add(new THREE.Points(sg, new THREE.PointsMaterial({color:0xffffff, size:0.18, map:getDotTex(), transparent:true, alphaTest:0.05, depthWrite:false, sizeAttenuation:true, fog:false})));
     }
     sky.add(snowGrp);
   } else if(decor === "sky"){                           // 雲がいっぱい＋遠くを飛ぶ鳥のむれ
@@ -1189,7 +1267,7 @@ function buildLevel(n){
   clearLevel();
   levelGroup = new THREE.Group();
   scene.add(levelGroup);
-  plats = []; blocks = []; gemList = []; spinners = []; pads = []; tiles = []; movers = []; belts = []; cats = []; turtles = []; penguins = []; flocks = []; elevs = []; turns = [];
+  plats = []; blocks = []; gemList = []; spinners = []; pads = []; tiles = []; movers = []; belts = []; cats = []; turtles = []; penguins = []; flocks = []; elevs = []; turns = []; ponds = [];
 
   const rand = rng(n * 9973 + 17);
   const special = n % 10 === 0 ? SPECIALS[(n / 10 - 1) % SPECIALS.length] : null;   // 10ステージごとの専用ステージ
@@ -1203,7 +1281,7 @@ function buildLevel(n){
 
   let d = 0, cx = 0, cy = 0, flip = false;
   const width = Math.max(5.6, 7.2 - n * 0.2);
-  const length = 90 + n * 18;
+  const length = special ? Math.min(900, 300 + n * 4) : 90 + n * 18;
   railsOn = false;
   const rampCol = new THREE.Color(0xff8a3d);
   const moverCol = new THREE.Color(0xff6b9d);
@@ -1238,11 +1316,11 @@ function buildLevel(n){
   }
 
   // カーブする道（短い区間をつなげて当たり判定にする）
-  function addRibbon(len, w, y0, y1, color, cxFn, wFn){
+  function addRibbon(len, w, y0, y1, color, cxFn, wFn, yFn){
     const wf = wFn || (() => w);
-    const seg = Math.max(2, Math.round(len));
+    const seg = Math.max(2, Math.round(len * (yFn ? 2 : 1)));
     const pts = [];
-    for(let i=0;i<=seg;i++){ const t = i / seg; pts.push({x:cxFn(t), y:y0 + (y1 - y0) * t, d:d + len * t, w:wf(t)}); }
+    for(let i=0;i<=seg;i++){ const t = i / seg; pts.push({x:cxFn(t), y:yFn ? yFn(t) : y0 + (y1 - y0) * t, d:d + len * t, w:wf(t)}); }
     for(let i=0;i<seg;i++){
       plats.push({d0:pts[i].d, d1:pts[i+1].d, cx:pts[i].x, cx0:pts[i].x, cx1:pts[i+1].x, w:(pts[i].w + pts[i+1].w) / 2,
                   y0:pts[i].y, y1:pts[i+1].y, curve:true, rails:railsOn});
@@ -1365,9 +1443,15 @@ function buildLevel(n){
   const hardTypes = ["jump","chain","bigjump","spinner","mover","trampoline","ice","belt","penguin","flock","hill","turntable","jumpfest","elevator"];
   let prevHard = false;
   // そのレベルで初めて出るしかけは、かならず2か所出す（ランダムだけだと出ないことがあるため）
-  const NEW_AT = {4:["jump","cat"], 5:["turtle"], 6:["penguin"], 7:["flock"], 8:["hill"], 9:["turntable"], 10:["snake"], 11:["jumpfest"], 13:["elevator"]};
+  const NEW_AT = {3:["pond"], 4:["jump","cat"], 5:["turtle"], 6:["penguin","bumpy"], 7:["flock"], 8:["hill"], 9:["turntable"], 10:["snake"], 11:["jumpfest"], 13:["elevator"]};
   const feats = [];
   (NEW_AT[n] || []).forEach(t=>{ feats.push({t, at:length * 0.25}); feats.push({t, at:length * 0.6}); });
+  if(n >= 14 && !special){                                        // レベル14以降：変化のある道を必ず入れる（長いステージは数を増やす）
+    const per = Math.max(1, Math.floor(length / 300));
+    ["hill","turntable","elevator","jumpfest","snake"].forEach((t, k)=>{
+      for(let i=0; i<per; i++) feats.push({t, at:length * ((i + 0.12 + 0.15 * k) / per)});
+    });
+  }
   feats.sort((a, c)=> a.at - c.at);
   minY = 0;
   addPlat(14, width, 0, 0, trackCol, 0);
@@ -1381,7 +1465,39 @@ function buildLevel(n){
 
   const smooth = t => t * t * (3 - 2 * t);
 
-  while(!special && d < length){
+  const spawnA = !special ? null : ({
+      cat:(p, df, side)=>{
+        const mesh = buildCat(-side), cxp = p.cx + side * p.w * 0.22, dd = p.d0 + (p.d1 - p.d0) * df;
+        mesh.position.set(cxp, p.y0, -dd); levelGroup.add(mesh);
+        cats.push({mesh, arm:mesh.userData.arm, paw:mesh.userData.paw, arm2:mesh.userData.arm2, tail:mesh.userData.tail, x:cxp, bx:cxp, d:dd, y:p.y0, sx:-side, t:-1, cd:rand() * 0.6, hit:false});
+      },
+      penguin:(p, df, side)=>{
+        const mesh = buildPenguin(); levelGroup.add(mesh);
+        penguins.push({mesh, body:mesh.userData.body, fl:mesh.userData.fl, fr:mesh.userData.fr, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0,
+                       half:Math.max(1.2, p.w / 2 - 0.9), side, state:"wait", t:1 + rand() * 1.5, x:p.cx, sliding:false, from:1, hitCd:0, ry:0});
+      },
+      turtle:(p, df, side)=>{
+        const mesh = buildTurtle(); levelGroup.add(mesh);
+        turtles.push({mesh, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, amp:p.w / 2 - 1.0, speed:0.4 + rand() * 0.15, phase:rand() * 6.28, x:p.cx, ry:0});
+      },
+      flock:(p, df, side)=>{
+        const grp = new THREE.Group(); levelGroup.add(grp);
+        const offs = [[0, 0], [-0.9, 0.55], [-0.9, -0.55], [-1.8, 1.1], [-1.8, -1.1]];
+        const birds = offs.map(o=>{ const m = buildSmallBird(); grp.add(m); return {mesh:m, wings:m.userData.wings, off:o, x:p.cx}; });
+        flocks.push({grp, birds, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, half:p.w / 2 + 3.5, phase:rand() * 8, dir:1, flying:false, cd:0});
+      },
+      hedgehog:(p, df, side)=>{
+        const mesh = buildHedgehog(); levelGroup.add(mesh); const bw = 1.3;
+        blocks.push({mesh, cx:p.cx, amp:p.w / 2 - bw / 2, bw, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, speed:0.9 + rand() * 0.5, phase:rand() * 6.28});
+      }
+  })[special.id];
+  const featList = ["arc","snake","hill","bumpy","pond"];                       // 専用ステージにまぜる、変化のある道
+  if(n >= 15) featList.push("trampoline");
+  if(n >= 20) featList.push("jumpfest", "turntable");
+  if(n >= 30) featList.push("elevator", "bigjump");
+  let siCount = 0, lastFeat = "", alt = 1;
+
+  while(d < length){
     let type = pool[Math.floor(rand() * pool.length)];
     if(d < 45) prevHard = true;                       // 最初の45mはやさしく
     if(prevHard){                                      // むずかしい区間のあとは、一息つける区間にする
@@ -1389,6 +1505,10 @@ function buildLevel(n){
     }
     const fi = feats.findIndex(x => d >= x.at);
     if(fi >= 0){ type = feats[fi].t; feats.splice(fi, 1); }   // 新しいしかけを確実に入れる
+    if(special){                                      // 専用ステージ：動物のいる道と、変化のある道を交互に
+      if(siCount++ % 2 === 0) type = "animals";
+      else { let ft; do{ ft = featList[Math.floor(rand() * featList.length)]; }while(ft === lastFeat && featList.length > 1); lastFeat = ft; type = ft; }
+    }
     prevHard = hardTypes.indexOf(type) >= 0;
     // ときどきガードレール付きの区間にする（レベル1〜2は全部ガードレール）
     // ガードレールは「落ちやすそうな場所」だけに、ときどき（何もない道には付けない）
@@ -1466,6 +1586,51 @@ function buildLevel(n){
       railsOn = true;
       const p = addPlat(14, width, cy, cy, col(), cx);
       addGems(4, p);
+    } else if(type === "animals"){
+      // 専用ステージの動物の道
+      railsOn = false;
+      const p = addPlat(17, width, cy, cy, col(), cx);
+      addGems(5, p);
+      alt = -alt;
+      spawnA(p, 0.3, alt);
+      if(special.id !== "hedgehog" || n >= 50) spawnA(p, 0.72, -alt);
+      if(n >= 50 && special.id !== "hedgehog") spawnA(p, 0.5, alt);
+      p.mobUsed = true; p.noMob = true;
+    } else if(type === "pond"){
+      // 道の中の池（丸い池）：落ちると「ぽちゃん」と沈む。池のよこの道なら通れる
+      const plen = 7.2, sideP = rand() < 0.5 ? -1 : 1;
+      const rx = width * 0.28, rz = 3.4;
+      const pre = addPlat(5, width, cy, cy, col(), cx); pre.noMob = true;
+      const pd0 = d, pcd = pd0 + plen / 2;
+      const pondCx = cx + sideP * (width / 2 - rx - 0.1);
+      // 池の部分の道：長方形に、だ円の穴をあけた板
+      const shp = new THREE.Shape();
+      shp.moveTo(cx - width / 2, pd0); shp.lineTo(cx + width / 2, pd0); shp.lineTo(cx + width / 2, pd0 + plen); shp.lineTo(cx - width / 2, pd0 + plen); shp.lineTo(cx - width / 2, pd0);
+      const hole = new THREE.Path(); hole.absellipse(pondCx, pcd, rx, rz, 0, Math.PI * 2, true, 0); shp.holes.push(hole);
+      const eg = new THREE.ExtrudeGeometry(shp, {depth:0.7, bevelEnabled:false, curveSegments:32});
+      const tx = checkerTex.clone(); tx.repeat.set(0.625, 0.625); tx.needsUpdate = true;
+      const em = new THREE.Mesh(eg, new THREE.MeshPhongMaterial({color:col(), map:tx, shininess:20}));
+      em.rotation.x = -Math.PI / 2; em.position.set(0, cy - 0.7, 0); levelGroup.add(em);
+      plats.push({d0:pd0, d1:pd0 + plen, cx, cx0:cx, cx1:cx, w:width, y0:cy, y1:cy, rails:false, noMob:true});
+      d += plen;
+      // 池の底（だ円）と水面
+      const basin = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 3.0, 40, 1, false), new THREE.MeshPhongMaterial({color:0x1b5e84, side:THREE.BackSide}));
+      basin.scale.set(rx, 1, rz); basin.position.set(pondCx, cy - 1.5, -pcd); levelGroup.add(basin);
+      const wsurf = new THREE.Mesh(new THREE.CircleGeometry(1, 40),
+        new THREE.MeshPhongMaterial({color:0x3bb8e8, transparent:true, opacity:0.8, shininess:90, emissive:0x0a3a4a, depthWrite:false}));
+      wsurf.scale.set(rx, rz, 1); wsurf.rotation.x = -Math.PI / 2; wsurf.position.set(pondCx, cy - 0.12, -pcd); levelGroup.add(wsurf);
+      const shore = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.13, 40), new THREE.MeshPhongMaterial({color:0xefe2b8, side:THREE.DoubleSide}));
+      shore.scale.set(rx, rz, 1); shore.rotation.x = -Math.PI / 2; shore.position.set(pondCx, cy + 0.015, -pcd); levelGroup.add(shore);
+      ponds.push({cx:pondCx, cd:pcd, rx, rz, y:cy - 0.12});
+      const post = addPlat(5, width, cy, cy, col(), cx); post.noMob = true;
+      const pathX = cx - sideP * (width / 2 - (width - 2 * rx - 0.1) / 2);
+      addCoin(cx, pre.d0 + 2.5, cy + 1.1); addCoin(pathX, pcd, cy + 1.1); addCoin(cx, post.d0 + 2.5, cy + 1.1);
+    } else if(type === "bumpy"){
+      // 凸凹道：小さなコブが続く。のぼりは減速、くだりは加速、頂上でふわっと跳ねる
+      const len = 36, kb = 7, A0 = 0.3 + Math.min(n * 0.008, 0.15), base = cy;
+      const yf = t => base + A0 * Math.pow(Math.sin(Math.PI * kb * t), 2);
+      const r = addRibbon(len, width, cy, cy, col(), t => cx, null, yf);
+      for(let i=0; i<9; i++){ const t = (i + 0.5) / 9; addCoin(cx, r.d0 + len * t, yf(t) + 1.1); }
     } else if(type === "hill"){
       // 急な上り坂：スピードをつけないと登れない（登ったあとは下り坂）
       const run = addPlat(8, width, cy, cy, col(), cx); run.noMob = true;
@@ -1660,60 +1825,6 @@ function buildLevel(n){
     }
   }
 
-  // 専用ステージ：その動物だらけ
-  if(special){
-    const spawn = {
-      cat:(p, df, side)=>{
-        const mesh = buildCat(-side), cxp = p.cx + side * p.w * 0.22, dd = p.d0 + (p.d1 - p.d0) * df;
-        mesh.position.set(cxp, p.y0, -dd); levelGroup.add(mesh);
-        cats.push({mesh, arm:mesh.userData.arm, paw:mesh.userData.paw, arm2:mesh.userData.arm2, tail:mesh.userData.tail, x:cxp, bx:cxp, d:dd, y:p.y0, sx:-side, t:-1, cd:rand() * 0.6, hit:false});
-      },
-      penguin:(p, df, side)=>{
-        const mesh = buildPenguin(); levelGroup.add(mesh);
-        penguins.push({mesh, body:mesh.userData.body, fl:mesh.userData.fl, fr:mesh.userData.fr, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0,
-                       half:Math.max(1.2, p.w / 2 - 0.9), side, state:"wait", t:1 + rand() * 1.5, x:p.cx, sliding:false, from:1, hitCd:0, ry:0});
-      },
-      turtle:(p, df, side)=>{
-        const mesh = buildTurtle(); levelGroup.add(mesh);
-        turtles.push({mesh, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, amp:p.w / 2 - 1.0, speed:0.4 + rand() * 0.15, phase:rand() * 6.28, x:p.cx, ry:0});
-      },
-      flock:(p, df, side)=>{
-        const grp = new THREE.Group(); levelGroup.add(grp);
-        const offs = [[0, 0], [-0.9, 0.55], [-0.9, -0.55], [-1.8, 1.1], [-1.8, -1.1]];
-        const birds = offs.map(o=>{ const m = buildSmallBird(); grp.add(m); return {mesh:m, wings:m.userData.wings, off:o, x:p.cx}; });
-        flocks.push({grp, birds, cx:p.cx, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, half:p.w / 2 + 3.5, phase:rand() * 8, dir:1, flying:false, cd:0});
-      },
-      hedgehog:(p, df, side)=>{
-        const mesh = buildHedgehog(); levelGroup.add(mesh); const bw = 1.3;
-        blocks.push({mesh, cx:p.cx, amp:p.w / 2 - bw / 2, bw, d:p.d0 + (p.d1 - p.d0) * df, y:p.y0, speed:0.9 + rand() * 0.5, phase:rand() * 6.28});
-      }
-    }[special.id];
-    const segs = 9 + Math.min(5, Math.floor(n / 10));
-    let alt = 1;
-    for(let i=0; i<segs; i++){
-      railsOn = false;
-      if(i % 3 === 2){                                  // ひと息つくカーブ（動物はいない）
-        const sgn = rand() < 0.5 ? -1 : 1, x0 = cx;
-        if(i % 2 === 0){
-          const r = addRibbon(36, width, cy, cy, col(), t => x0 + sgn * 2.4 * Math.sin(t * Math.PI * 2),
-                              t => width + 0.8 * Math.min(1, Math.min(t, 1 - t) / 0.12));
-          addGemsCurve(8, r);
-        } else {
-          const r = addRibbon(40, width, cy, cy, col(), t => x0 + sgn * 5 * Math.sin(t * Math.PI),
-                              t => width + 0.8 * Math.min(1, Math.min(t, 1 - t) / 0.12));
-          addGemsCurve(8, r);
-        }
-      } else {
-        const p = addPlat(17, width, cy, cy, col(), cx);
-        addGems(5, p);
-        alt = -alt;
-        spawn(p, 0.3, alt);
-        if(special.id !== "hedgehog") spawn(p, 0.72, -alt);
-        p.mobUsed = true; p.noMob = true;
-      }
-    }
-  }
-
   // ゴール
   railsOn = false;
   const fin = addPlat(14, 6, cy, cy, new THREE.Color(0xffd34d), cx);
@@ -1742,6 +1853,13 @@ function buildLevel(n){
   levelGroup.add(banner);
 
   // 背景（空・雲・うかぶ島）
+  waterY = th.water ? minY - 5 : null;                   // 池・海（落ちると「ぽちゃん」）
+  if(waterY !== null){
+    const wm = new THREE.Mesh(new THREE.PlaneGeometry(170, d + 140),
+      new THREE.MeshPhongMaterial({color:th.water, transparent:true, opacity:0.86, shininess:90, emissive:0x0a2a3a}));
+    wm.rotation.x = -Math.PI / 2; wm.position.set(0, waterY, -(d / 2));
+    levelGroup.add(wm);
+  }
   buildScenery(levelGroup, th, rand, d);
   $("lv").textContent = "Lv " + n;
 }
@@ -1764,8 +1882,16 @@ function resetBall(){
 }
 
 let gSlope = 0;
+function pondAt(x, d){
+  for(let i=0; i<ponds.length; i++){
+    const q = ponds[i], ux = (x - q.cx) / q.rx, ud = (d - q.cd) / q.rz;
+    if(ux * ux + ud * ud <= 1) return q;
+  }
+  return null;
+}
 function groundAt(x, d){
   let best = null; gSlope = 0; gPlat = null;
+  if(ponds.length && pondAt(x, d)) return null;          // 池のところは、道に穴があいている
   for(let i=0;i<plats.length;i++){
     const p = plats[i];
     if(d < p.d0 || d > p.d1) continue;
@@ -1997,6 +2123,7 @@ function update(dt){
     e.y0 = e.y1 = e.elev.y0 + h; e.mesh.position.y = e.y0 - 0.35;
   });
   turns.forEach(t=>{ t.mesh.rotation.y = t.p.disc.omega * time; });   // 円盤
+  updateFx(dt);
   // カメ
   turtles.forEach(t=>{
     const ph = time * t.speed + t.phase;
@@ -2147,8 +2274,10 @@ function update(dt){
     if(b.grounded && gPlat && gPlat.bounce){ b.grounded = false; b.vy = 12; b.y += 0.02; playBoing(); }   // トランポリン
     if(b.grounded){
       if(g !== null && g >= b.y - 0.35){
-        b.vy = Math.max(-14, Math.min(9, (g - b.y) / dt));
-        b.y = g;
+        const vyG = Math.max(-14, Math.min(9, (g - b.y) / dt));
+        if(b.vy > 1.2 && vyG < b.vy - GRAV * dt * 2){
+          b.grounded = false;                              // 山の頂上で、勢いのまま、ふわっと飛び出す
+        } else { b.vy = vyG; b.y = g; }
       } else {
         b.grounded = false;
       }
@@ -2157,12 +2286,18 @@ function update(dt){
       const py = b.y;
       b.vy -= GRAV * dt;
       b.y += b.vy * dt;
+      const pn = pondAt(b.x, b.d);                         // 池の中：ゆっくり沈んでいく
+      if(pn && b.y < pn.y){
+        b.pond = pn;
+        if(!b.splashed){ b.splashed = true; splash(b.x, b.d, pn.y); }
+        b.vy = Math.max(-3, b.vy * Math.max(0, 1 - 5 * dt));
+      }
       // 下から突き抜けて着地しない（上から落ちてきたときだけ着地）
       if(g !== null && b.y <= g && py >= g - 0.3 && b.vy <= 0){ b.y = g; b.grounded = true; b.vy = 0; }
     }
 
     // 落ちていくときはだんだん小さくなる
-    if(b.grounded){ b.gy = b.y; b.declined = false; }
+    if(b.grounded){ b.gy = b.y; b.declined = false; b.splashed = false; b.pond = null; }
     // 助けが必要なときに戻る場所を、少しずつ記録しておく
     b.trailT = (b.trailT || 0) + dt;
     if(b.grounded && b.trailT > 0.15 && gPlat && !gPlat.move && !gPlat.bounce && !gPlat.ice && !gPlat.belt && !gPlat.elev && !gPlat.disc && Math.abs(gPlat.y1 - gPlat.y0) < 0.01){
@@ -2276,6 +2411,10 @@ function update(dt){
       }
     }
 
+    if(b.pond && !b.grounded){                          // 池に落ちた：レスキューを選ぶ / 沈みきったらミス
+      if(rescues > 0 && !b.declined && b.y < b.pond.y - 1.4){ openChoice(); }
+      else if(b.y < b.pond.y - 2.6){ loseLife("pond"); }
+    }
     const falling = !b.grounded && b.vy < 0 && (g === null || b.y < g - 0.4);
     if(falling && rescues > 0 && !b.declined && b.y < (b.gy || 0) - 6){ openChoice(); }   // 助けを使うか選ぶ
     else if(b.y < Math.max(minY - 8, (b.gy || 0) - 12)) loseLife("fall");
@@ -2320,6 +2459,9 @@ function update(dt){
     deadTimer += dt;
     if(b.fell){
       b.vy -= GRAV * dt; b.y += b.vy * dt;           // 落ち続けながら小さくなる
+      if(b.pond){                                      // 池の底までゆっくり沈む
+        b.vy = Math.max(-1.5, b.vy * 0.9); b.y = Math.max(b.y, b.pond.y - 3.0);
+      }
       ballMesh.scale.setScalar(fallScale());
     } else {
       ballMesh.scale.setScalar(Math.max(0.01, 1 - deadTimer * 2.2));
